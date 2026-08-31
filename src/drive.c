@@ -76,11 +76,76 @@ static bool apply_wheel_velocities(struct rover_state *rover,
  */
 enum drive_status drive_to_target(struct rover_state *rover,
                                   const struct coordinate *target) {
-  (void)rover;
-  (void)target;
+  // 1. Validate inputs
+  if (rover == NULL || target == NULL) {
+    return DRIVE_INVALID_INPUT;
+  }
+  if (!isfinite(rover->heading_rad) ||
+      !isfinite(rover->position.latitude) ||
+      !isfinite(rover->position.longitude) ||
+      !isfinite(target->latitude) ||
+      !isfinite(target->longitude) ||
+      !isfinite(target->altitude)) {
+    return DRIVE_INVALID_INPUT;
+  }
 
-  /* TODO: Implement the differential-drive controller. */
-  return DRIVE_INVALID_INPUT;
+  int steps = 0;
+
+  while (steps < MAX_DRIVE_STEPS) {
+    // Compute vector to target
+    float dx = target->longitude - rover->position.longitude;
+    float dy = target->latitude - rover->position.latitude;
+    float distance = sqrtf(dx * dx + dy * dy);
+
+    // Check if target reached
+    if (distance < TARGET_TOLERANCE) {
+      struct wheel_velocity stop = {0.0f, 0.0f};
+      apply_wheel_velocities(rover, stop);
+      return DRIVE_REACHED_TARGET;
+    }
+
+    // Compute desired heading
+    float target_heading = atan2f(dy, dx);
+    float heading_error = normalize_angle(target_heading - rover->heading_rad);
+
+    // Linear velocity: full speed when far, slow down near target
+    float linear_vel = MAX_LINEAR_VELOCITY;
+    if (distance < 2.0f) {
+      linear_vel = MAX_LINEAR_VELOCITY * (distance / 2.0f);
+      if (linear_vel < 0.05f) linear_vel = 0.05f; // minimum for controllability
+    }
+
+    // Angular velocity: proportional to heading error
+    float angular_vel = HEADING_GAIN * heading_error;
+    if (angular_vel > MAX_ANGULAR_VELOCITY)
+      angular_vel = MAX_ANGULAR_VELOCITY;
+    else if (angular_vel < -MAX_ANGULAR_VELOCITY)
+      angular_vel = -MAX_ANGULAR_VELOCITY;
+
+    // Convert to wheel velocities
+    struct wheel_velocity vel;
+    vel.left  = (linear_vel / WHEEL_RADIUS) -
+                (angular_vel * WHEEL_SEPARATION) / (2.0f * WHEEL_RADIUS);
+    vel.right = (linear_vel / WHEEL_RADIUS) +
+                (angular_vel * WHEEL_SEPARATION) / (2.0f * WHEEL_RADIUS);
+
+    // Clamp wheel velocities to MAX_WHEEL_VELOCITY
+    float max_abs = fmaxf(fabsf(vel.left), fabsf(vel.right));
+    if (max_abs > MAX_WHEEL_VELOCITY) {
+      float scale = MAX_WHEEL_VELOCITY / max_abs;
+      vel.left  *= scale;
+      vel.right *= scale;
+    }
+
+    // Apply velocities
+    if (!apply_wheel_velocities(rover, vel)) {
+      return DRIVE_INVALID_INPUT;
+    }
+
+    steps++;
+  }
+
+  return DRIVE_MAX_STEPS_EXCEEDED;
 }
 
 static float normalize_angle(float angle) {
