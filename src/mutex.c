@@ -40,18 +40,28 @@ int rwlock_init(ReadWrite_Lock *rw){
  *   correctly.
  */
 void reader_enter(ReadWrite_Lock *lock){
+    // Lock writer_count mutex to prevent writers from entering
+    // This ensures writers are blocked while readers are active
     pthread_mutex_lock(&lock->writer_count);
 
+    // Lock reader_count mutex to safely modify reader count
     pthread_mutex_lock(&lock->reader_count);
 
+    // Increment the number of active readers
     lock->reader++;
 
-    if (lock->reader != 1) {
-        // TODO: Complete reader entry logic
+    // If this is the first reader (reader count was 0 before increment),
+    // we need to acquire the resource semaphore to block writers
+    if (lock->reader == 1) {
+        // The first reader acquires the resource semaphore
+        // This prevents writers from accessing the resource
+        sem_wait(&lock->resource);
     }
 
+    // Unlock reader_count mutex (other readers can now increment count)
     pthread_mutex_unlock(&lock->reader_count);
 
+    // Unlock writer_count mutex (other readers can now enter)
     pthread_mutex_unlock(&lock->writer_count);
 }
 
@@ -65,14 +75,20 @@ void reader_enter(ReadWrite_Lock *lock){
  *   the last reader exits.
  */
 void reader_exit(ReadWrite_Lock *rw){
+    // Lock reader_count mutex to safely modify reader count
     pthread_mutex_lock(&rw->reader_count);
 
+    // Decrement the number of active readers
     rw->reader--;
 
+    // If this was the last reader (reader count is now 0),
+    // release the resource semaphore to allow writers
     if(rw->reader == 0){
+        // Release the resource semaphore so writers can access
         sem_post(&rw->resource);
     }
 
+    // Unlock reader_count mutex
     pthread_mutex_unlock(&rw->reader_count);
 }
 
@@ -86,7 +102,13 @@ void reader_exit(ReadWrite_Lock *rw){
  * - Ensure writer synchronization is handled correctly.
  */
 void writer_enter(ReadWrite_Lock *lock){
+    // Lock writer_count mutex to ensure exclusive writer access
+    // This prevents other writers from entering simultaneously
     pthread_mutex_lock(&lock->writer_count);
+    
+    // Wait for the resource semaphore
+    // This blocks if there are active readers or another writer
+    // The semaphore ensures exclusive access to the resource
     sem_wait(&lock->resource);
 }
 
@@ -98,7 +120,11 @@ void writer_enter(ReadWrite_Lock *lock){
  * - Release any synchronization primitive acquired by writer_enter().
  */
 void writer_exit(ReadWrite_Lock *lock){
+    // Release the resource semaphore to allow other threads to access
+    // This could be another writer or multiple readers
     sem_post(&lock->resource);
+    
+    // Unlock writer_count mutex to allow other writers to enter
     pthread_mutex_unlock(&lock->writer_count);
 }
 
